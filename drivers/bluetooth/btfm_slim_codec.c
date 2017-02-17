@@ -26,9 +26,6 @@
 #include <sound/tlv.h>
 #include <btfm_slim.h>
 
-static int bt_soc_enable_status;
-
-
 static int btfm_slim_codec_write(struct snd_soc_codec *codec, unsigned int reg,
 	unsigned int value)
 {
@@ -41,31 +38,8 @@ static unsigned int btfm_slim_codec_read(struct snd_soc_codec *codec,
 	return 0;
 }
 
-static int bt_soc_status_get(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	ucontrol->value.integer.value[0] = bt_soc_enable_status;
-	return 1;
-}
-
-static int bt_soc_status_put(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	return 1;
-}
-
-static const struct snd_kcontrol_new status_controls[] = {
-	SOC_SINGLE_EXT("BT SOC status", 0, 0, 1, 0,
-			bt_soc_status_get,
-			bt_soc_status_put)
-
-};
-
-
 static int btfm_slim_codec_probe(struct snd_soc_codec *codec)
 {
-	snd_soc_add_codec_controls(codec, status_controls,
-				   ARRAY_SIZE(status_controls));
 	return 0;
 }
 
@@ -80,7 +54,7 @@ static int btfm_slim_dai_startup(struct snd_pcm_substream *substream,
 	int ret;
 	struct btfmslim *btfmslim = dai->dev->platform_data;
 
-	BTFMSLIM_DBG("substream = %s  stream = %d dai->name = %s",
+	BTFMSLIM_DBG("substream = %s  stream = %d dai name = %s",
 		 substream->name, substream->stream, dai->name);
 	ret = btfm_slim_hw_init(btfmslim);
 	return ret;
@@ -89,48 +63,10 @@ static int btfm_slim_dai_startup(struct snd_pcm_substream *substream,
 static void btfm_slim_dai_shutdown(struct snd_pcm_substream *substream,
 		struct snd_soc_dai *dai)
 {
-	int i;
 	struct btfmslim *btfmslim = dai->dev->platform_data;
-	struct btfmslim_ch *ch;
-	uint8_t rxport, grp = false, nchan = 1;
 
-	BTFMSLIM_DBG("dai->name: %s, dai->id: %d, dai->rate: %d", dai->name,
-		dai->id, dai->rate);
-
-	switch (dai->id) {
-	case BTFM_FM_SLIM_TX:
-		grp = true; nchan = 2;
-		ch = btfmslim->tx_chs;
-		rxport = 0;
-		break;
-	case BTFM_BT_SCO_SLIM_TX:
-		ch = btfmslim->tx_chs;
-		rxport = 0;
-		break;
-	case BTFM_BT_SCO_A2DP_SLIM_RX:
-	case BTFM_BT_SPLIT_A2DP_SLIM_RX:
-		ch = btfmslim->rx_chs;
-		rxport = 1;
-		break;
-	case BTFM_SLIM_NUM_CODEC_DAIS:
-	default:
-		BTFMSLIM_ERR("dai->id is invalid:%d", dai->id);
-		return;
-	}
-
-	/* Search for dai->id matched port handler */
-	for (i = 0; (i < BTFM_SLIM_NUM_CODEC_DAIS) &&
-		(ch->id != BTFM_SLIM_NUM_CODEC_DAIS) &&
-		(ch->id != dai->id); ch++, i++)
-		;
-
-	if ((ch->port == BTFM_SLIM_PGD_PORT_LAST) ||
-		(ch->id == BTFM_SLIM_NUM_CODEC_DAIS)) {
-		BTFMSLIM_ERR("ch is invalid!!");
-		return;
-	}
-
-	btfm_slim_disable_ch(btfmslim, ch, rxport, grp, nchan);
+	BTFMSLIM_DBG("substream = %s  stream = %d dai name = %s",
+		 substream->name, substream->stream, dai->name);
 	btfm_slim_hw_deinit(btfmslim);
 }
 
@@ -138,7 +74,7 @@ static int btfm_slim_dai_hw_params(struct snd_pcm_substream *substream,
 			    struct snd_pcm_hw_params *params,
 			    struct snd_soc_dai *dai)
 {
-	BTFMSLIM_DBG("dai->name = %s DAI-ID %x rate %d num_ch %d",
+	BTFMSLIM_DBG("dai name = %s DAI-ID %x rate %d num_ch %d",
 		dai->name, dai->id, params_rate(params),
 		params_channels(params));
 
@@ -152,13 +88,9 @@ int btfm_slim_dai_prepare(struct snd_pcm_substream *substream,
 	struct btfmslim *btfmslim = dai->dev->platform_data;
 	struct btfmslim_ch *ch;
 	uint8_t rxport, grp = false, nchan = 1;
-	bt_soc_enable_status = 0;
 
-	BTFMSLIM_DBG("dai->name: %s, dai->id: %d, dai->rate: %d", dai->name,
+	BTFMSLIM_DBG("dai name: %s, dai->id: %d, dai->rate: %d", dai->name,
 		dai->id, dai->rate);
-
-	/* save sample rate */
-	btfmslim->sample_rate = dai->rate;
 
 	switch (dai->id) {
 	case BTFM_FM_SLIM_TX:
@@ -194,10 +126,53 @@ int btfm_slim_dai_prepare(struct snd_pcm_substream *substream,
 	}
 
 	ret = btfm_slim_enable_ch(btfmslim, ch, rxport, dai->rate, grp, nchan);
+	return ret;
+}
 
-	/* save the enable channel status */
-	if (ret == 0)
-		bt_soc_enable_status = 1;
+int btfm_slim_dai_hw_free(struct snd_pcm_substream *substream,
+	struct snd_soc_dai *dai)
+{
+	int i, ret = -EINVAL;
+	struct btfmslim *btfmslim = dai->dev->platform_data;
+	struct btfmslim_ch *ch;
+	uint8_t rxport, grp = false, nchan = 1;
+
+	BTFMSLIM_DBG("dai name: %s, dai->id: %d, dai->rate: %d", dai->name,
+		dai->id, dai->rate);
+
+	switch (dai->id) {
+	case BTFM_FM_SLIM_TX:
+		grp = true; nchan = 2;
+		ch = btfmslim->tx_chs;
+		rxport = 0;
+		break;
+	case BTFM_BT_SCO_SLIM_TX:
+		ch = btfmslim->tx_chs;
+		rxport = 0;
+		break;
+	case BTFM_BT_SCO_A2DP_SLIM_RX:
+	case BTFM_BT_SPLIT_A2DP_SLIM_RX:
+		ch = btfmslim->rx_chs;
+		rxport = 1;
+		break;
+	case BTFM_SLIM_NUM_CODEC_DAIS:
+	default:
+		BTFMSLIM_ERR("dai->id is invalid:%d", dai->id);
+		return ret;
+	}
+
+	/* Search for dai->id matched port handler */
+	for (i = 0; (i < BTFM_SLIM_NUM_CODEC_DAIS) &&
+		(ch->id != BTFM_SLIM_NUM_CODEC_DAIS) &&
+		(ch->id != dai->id); ch++, i++)
+		;
+
+	if ((ch->port == BTFM_SLIM_PGD_PORT_LAST) ||
+		(ch->id == BTFM_SLIM_NUM_CODEC_DAIS)) {
+		BTFMSLIM_ERR("ch is invalid!!");
+		return ret;
+	}
+	ret = btfm_slim_disable_ch(btfmslim, ch, rxport, grp, nchan);
 	return ret;
 }
 
@@ -268,9 +243,9 @@ static int btfm_slim_dai_get_channel_map(struct snd_soc_dai *dai,
 				 unsigned int *tx_num, unsigned int *tx_slot,
 				 unsigned int *rx_num, unsigned int *rx_slot)
 {
-	int i, ret = -EINVAL, *slot = NULL, j = 0, num = 1;
+	int i, ret = -EINVAL, *slot, j = 0, num = 1;
 	struct btfmslim *btfmslim = dai->dev->platform_data;
-	struct btfmslim_ch *ch = NULL;
+	struct btfmslim_ch *ch;
 
 	if (!btfmslim)
 		return ret;
@@ -307,9 +282,6 @@ static int btfm_slim_dai_get_channel_map(struct snd_soc_dai *dai,
 		*tx_num = 0;
 		*rx_num = num;
 		break;
-	default:
-		BTFMSLIM_ERR("Unsupported DAI %d", dai->id);
-		return -EINVAL;
 	}
 
 	do {
@@ -343,6 +315,7 @@ static struct snd_soc_dai_ops btfmslim_dai_ops = {
 	.shutdown = btfm_slim_dai_shutdown,
 	.hw_params = btfm_slim_dai_hw_params,
 	.prepare = btfm_slim_dai_prepare,
+	.hw_free = btfm_slim_dai_hw_free,
 	.set_channel_map = btfm_slim_dai_set_channel_map,
 	.get_channel_map = btfm_slim_dai_get_channel_map,
 };
